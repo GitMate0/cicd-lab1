@@ -1,0 +1,130 @@
+trigger:
+  branches:
+    include:
+      - main
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  # Назва вашого Service Connection у Project Settings -> Service connections
+  dockerRegistryServiceConnection: 'dockerhub-conn' 
+  # Ваш логін та репозиторій на Docker Hub
+  imageRepository: 'gitmate0/lab1-fastapi-crud'
+  # Тег для версіонування (номер білду + sha коміту)
+  tag: '$(Build.BuildId)-$(Build.SourceVersionMessage)'
+
+stages:
+
+  # -----------------------------------------------------------------
+  # Stage a: Збирання проєкту (Build & Validate Dependencies)
+  # -----------------------------------------------------------------
+  - stage: Build
+    displayName: 'a. Збирання проєкту'
+    jobs:
+      - job: BuildJob
+        displayName: 'Збір залежностей Python'
+        steps:
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: '3.12'
+            displayName: 'Встановлення Python'
+
+          - script: |
+              python -m pip install --upgrade pip
+              pip install -r requirements.txt
+            displayName: 'Встановлення залежностей з requirements.txt'
+
+
+  # -----------------------------------------------------------------
+  # Stage b: Запуск unit-тестів
+  # -----------------------------------------------------------------
+  - stage: Test
+    displayName: 'b. Запуск unit-тестів'
+    dependsOn: Build
+    jobs:
+      - job: TestJob
+        displayName: 'Запуск Pytest'
+        steps:
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: '3.12'
+            displayName: 'Встановлення Python'
+
+          - script: |
+              python -m pip install --upgrade pip
+              pip install -r requirements.txt
+              pip install pytest pytest-cov
+              pytest --junitxml=test-results.xml
+            displayName: 'Запуск pytest'
+
+          - task: PublishTestResults@2
+            condition: succeededOrFailed()
+            inputs:
+              testResultsFiles: '**/test-results.xml'
+              testRunTitle: 'Python Unit Tests'
+            displayName: 'Публікація результатів тестів у Azure DevOps'
+
+
+  # -----------------------------------------------------------------
+  # Stage c: Збирання Docker-образу
+  # -----------------------------------------------------------------
+  - stage: DockerBuild
+    displayName: 'c. Збирання Docker-образу'
+    dependsOn: Test
+    jobs:
+      - job: DockerBuildJob
+        displayName: 'Build Docker Image'
+        steps:
+          - task: Docker@2
+            displayName: 'Збирання Docker-образу'
+            inputs:
+              command: 'build'
+              repository: '$(imageRepository)'
+              dockerfile: '**/Dockerfile'
+              tags: |
+                $(Build.BuildId)
+
+
+  # -----------------------------------------------------------------
+  # Stage d: Присвоєння Docker-образу тегів
+  # -----------------------------------------------------------------
+  - stage: DockerTag
+    displayName: 'd. Присвоєння Docker-образу тегів'
+    dependsOn: DockerBuild
+    jobs:
+      - job: DockerTagJob
+        displayName: 'Тегування образу'
+        steps:
+          - task: Docker@2
+            displayName: 'Збирання образу з потрібними тегами'
+            inputs:
+              command: 'build'
+              repository: '$(imageRepository)'
+              dockerfile: '**/Dockerfile'
+              tags: |
+                $(Build.BuildId)
+                latest
+                v1.0
+
+
+  # -----------------------------------------------------------------
+  # Stage e: Публікація Docker-образу в Docker Hub
+  # -----------------------------------------------------------------
+  - stage: DockerPush
+    displayName: 'e. Публікація Docker-образу в Docker Hub'
+    dependsOn: DockerTag
+    jobs:
+      - job: DockerPushJob
+        displayName: 'Push to Docker Hub'
+        steps:
+          - task: Docker@2
+            displayName: 'Публікація образів з тегами в Docker Hub'
+            inputs:
+              containerRegistry: '$(dockerRegistryServiceConnection)'
+              repository: '$(imageRepository)'
+              command: 'push'
+              tags: |
+                $(Build.BuildId)
+                latest
+                v1.0
