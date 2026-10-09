@@ -13,7 +13,7 @@ variables:
 stages:
 
   # -----------------------------------------------------------------
-  # Stage a: Збирання проєкту (uv)
+  # Stage a: Збирання проєкту (Перевірка залежностей)
   # -----------------------------------------------------------------
   - stage: Build
     displayName: 'a. Збирання проєкту'
@@ -31,7 +31,7 @@ stages:
             displayName: 'Перевірка залежностей через uv'
 
   # -----------------------------------------------------------------
-  # Stage b: Запуск unit-тестів (uv)
+  # Stage b: Запуск unit-тестів
   # -----------------------------------------------------------------
   - stage: Test
     displayName: 'b. Запуск unit-тестів'
@@ -56,22 +56,94 @@ stages:
               testResultsFiles: '**/test-results.xml'
 
   # -----------------------------------------------------------------
-  # Stage c, d, e: Збирання, Тегування та Публікація в Docker Hub
+  # Stage c: Збирання Docker-образу та збереження його в Артефакти
   # -----------------------------------------------------------------
-  - stage: DockerPublish
-    displayName: 'c-e. Збирання, тегування та публікація Docker-образу'
+  - stage: DockerBuild
+    displayName: 'c. Збирання Docker-образу'
     dependsOn: Test
     jobs:
-      - job: BuildAndPushJob
-        displayName: 'Build and Push to Docker Hub'
+      - job: DockerBuildJob
         steps:
           - task: Docker@2
-            displayName: 'c, d, e. Build, Tag and Push'
+            displayName: 'Build Docker Image'
+            inputs:
+              command: 'build'
+              repository: '$(imageRepository)'
+              dockerfile: '**/Dockerfile'
+              tags: '$(Build.BuildId)'
+
+          # Зберігаємо образ у tar-архів
+          - script: |
+              mkdir -p $(Pipeline.Workspace)/docker-image
+              docker save $(imageRepository):$(Build.BuildId) -o $(Pipeline.Workspace)/docker-image/image.tar
+            displayName: 'Збереження Docker-образу у файл .tar'
+
+          # Передаємо файл образу між стейджами Azure DevOps
+          - task: PublishPipelineArtifact@1
+            inputs:
+              targetPath: '$(Pipeline.Workspace)/docker-image'
+              artifact: 'docker-image'
+            displayName: 'Публікація артефакту Docker-образу'
+
+  # -----------------------------------------------------------------
+  # Stage d: Присвоєння Docker-образу додаткових тегів
+  # -----------------------------------------------------------------
+  - stage: DockerTag
+    displayName: 'd. Присвоєння Docker-образу тегів'
+    dependsOn: DockerBuild
+    jobs:
+      - job: DockerTagJob
+        steps:
+          - task: DownloadPipelineArtifact@2
+            inputs:
+              buildType: 'current'
+              artifactName: 'docker-image'
+              targetPath: '$(Pipeline.Workspace)/docker-image'
+            displayName: 'Завантаження збереженого Docker-образу'
+
+          - script: |
+              docker load -i $(Pipeline.Workspace)/docker-image/image.tar
+              docker tag $(imageRepository):$(Build.BuildId) $(imageRepository):latest
+              docker tag $(imageRepository):$(Build.BuildId) $(imageRepository):v1.0
+            displayName: 'Присвоєння тегів latest та v1.0'
+
+          # Перезберігаємо образ із новими тегами для наступного етапу
+          - script: |
+              docker save $(imageRepository):$(Build.BuildId) $(imageRepository):latest $(imageRepository):v1.0 -o $(Pipeline.Workspace)/docker-image/tagged-image.tar
+            displayName: 'Збереження протегованих образів'
+
+          - task: PublishPipelineArtifact@1
+            inputs:
+              targetPath: '$(Pipeline.Workspace)/docker-image/tagged-image.tar'
+              artifact: 'tagged-docker-image'
+            displayName: 'Публікація артефакту протегованого образу'
+
+  # -----------------------------------------------------------------
+  # Stage e: Публікація Docker-образу в Docker Hub
+  # -----------------------------------------------------------------
+  - stage: DockerPush
+    displayName: 'e. Публікація Docker-образу в Docker Hub'
+    dependsOn: DockerTag
+    jobs:
+      - job: DockerPushJob
+        steps:
+          - task: DownloadPipelineArtifact@2
+            inputs:
+              buildType: 'current'
+              artifactName: 'tagged-docker-image'
+              targetPath: '$(Pipeline.Workspace)/docker-image'
+            displayName: 'Завантаження протегованого образу'
+
+          - script: |
+              docker load -i $(Pipeline.Workspace)/docker-image/tagged-image.tar
+            displayName: 'Завантаження образів у Docker Daemon'
+
+          - task: Docker@2
+            displayName: 'Авторизація та Push в Docker Hub'
             inputs:
               containerRegistry: '$(dockerRegistryServiceConnection)'
               repository: '$(imageRepository)'
-              command: 'buildAndPush'
-              dockerfile: '**/Dockerfile'
+              command: 'push'
               tags: |
                 $(Build.BuildId)
                 latest
