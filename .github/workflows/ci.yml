@@ -30,3 +30,14 @@ jobs:
 
       - name: Run unit tests
         run: pytest
+
+  docker-pack-n-push:
+    needs: build-n-test
+    uses: ./.github/workflows/docker.yml
+    with:
+      image_name: 'gitmate0/cicd-lab1-fastapi-crud'
+      image_tag: 'latest'
+      is_main_branch: ${{ github.ref == 'refs/heads/main' }}
+    secrets:
+      DOCKER_HUB_USERNAME: ${{ secrets.DOCKER_HUB_USERNAME }}
+      DOCKER_HUB_TOKEN: ${{ secrets.DOCKER_HUB_TOKEN }}
