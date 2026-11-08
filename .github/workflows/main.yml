@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - 'feature/**'
+      - 'bugfix/**'
+    paths-ignore:
+      - 'docs/**'
+      - 'README.md'
+
+jobs:
+  build-n-test:
+    name: Build and Unit Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up environment
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: python pip install -r requirements.txt
+
+      - name: Run unit tests
+        run: pytest
